@@ -25,6 +25,13 @@ const CLAUDE_SKILLS = {
 // Cache
 const cache = new Map();
 
+// Helper pour normaliser le path
+function normalizePath(url) {
+  const path = url?.split('?')[0] || '/';
+  // Retirer /api/mcp du début si présent
+  return path.replace(/^\/api\/mcp/, '') || '/';
+}
+
 // Handler principal
 export default async function handler(req, res) {
   // CORS
@@ -36,8 +43,8 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // FIX: Utiliser req.url directement (chemin relatif dans Vercel Functions)
-  const path = req.url?.split('?')[0] || '/';
+  // Normaliser le path
+  const path = normalizePath(req.url);
 
   try {
     // Route: Health check
@@ -136,6 +143,17 @@ export default async function handler(req, res) {
               },
               required: ["skill_name"]
             }
+          },
+          {
+            name: "search_skills",
+            description: "Recherche des skills par mot-clé",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string" }
+              },
+              required: ["query"]
+            }
           }
         ]
       });
@@ -150,7 +168,14 @@ export default async function handler(req, res) {
         return res.status(200).json({
           content: [{
             type: "text",
-            text: JSON.stringify({ total: skills.length, skills }, null, 2)
+            text: JSON.stringify({ 
+              total_skills: skills.length, 
+              skills: skills.map(s => ({
+                name: s.name,
+                description: s.description,
+                uri: `skill://${s.name}`
+              }))
+            }, null, 2)
           }]
         });
       }
@@ -176,10 +201,46 @@ export default async function handler(req, res) {
         return res.status(200).json({
           content: [{
             type: "text",
-            text: `# ${skill.name.toUpperCase()} Skill\n\n${content}`
+            text: `# ${skill.name.toUpperCase()} Skill\n\n${skill.description}\n\n---\n\n${content}`
           }]
         });
       }
+
+      if (name === 'search_skills') {
+        const query = args?.query?.toLowerCase();
+        if (!query) {
+          return res.status(400).json({
+            content: [{ type: "text", text: "Query parameter required" }],
+            isError: true
+          });
+        }
+
+        const skills = Object.values(CLAUDE_SKILLS);
+        const results = skills.filter(s =>
+          s.name.toLowerCase().includes(query) ||
+          s.description.toLowerCase().includes(query)
+        );
+
+        return res.status(200).json({
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              query,
+              found: results.length,
+              results: results.map(s => ({
+                name: s.name,
+                description: s.description,
+                uri: `skill://${s.name}`
+              }))
+            }, null, 2)
+          }]
+        });
+      }
+
+      return res.status(400).json({
+        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        isError: true
+      });
     }
 
     // Route: Page d'accueil
@@ -188,6 +249,7 @@ export default async function handler(req, res) {
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>Claude Skills MCP Gateway</title>
   <style>
     body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; line-height: 1.6; }
@@ -197,11 +259,13 @@ export default async function handler(req, res) {
     code { background: #e5e7eb; padding: 4px 8px; border-radius: 4px; font-size: 14px; }
     a { color: #2563eb; text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .status { color: #10b981; font-weight: bold; }
   </style>
 </head>
 <body>
   <h1>🎯 Claude Skills MCP Gateway</h1>
   <p>Serveur MCP exposant les skills Claude pour DUST</p>
+  <p class="status">✅ Status: Opérationnel</p>
   
   <h2>📚 Skills Disponibles</h2>
   ${Object.values(CLAUDE_SKILLS).map(s => `
@@ -213,23 +277,24 @@ export default async function handler(req, res) {
   <h2>🔗 URL pour DUST</h2>
   <code>https://${req.headers.host}/api/mcp</code>
   
-  <h2>📡 Endpoints</h2>
+  <h2>📡 Endpoints Disponibles</h2>
   <ul>
     <li><a href="/api/mcp/health">GET /api/mcp/health</a> - Health check</li>
     <li><a href="/api/mcp/skills">GET /api/mcp/skills</a> - Liste des skills</li>
     <li>POST /api/mcp/initialize - Initialisation MCP</li>
+    <li>POST /api/mcp/resources/list - Liste des ressources</li>
     <li>POST /api/mcp/tools/list - Liste des outils</li>
     <li>POST /api/mcp/tools/call - Appel d'outil</li>
   </ul>
   
-  <p style="margin-top: 40px; color: #6b7280;">
-    <strong>Status:</strong> ✅ Opérationnel<br>
-    <strong>Version:</strong> 1.0.0
+  <p style="margin-top: 40px; color: #6b7280; font-size: 14px;">
+    <strong>Version:</strong> 1.0.0 | 
+    <strong>Nexialog Consulting</strong>
   </p>
 </body>
 </html>`;
       
-      res.setHeader('Content-Type', 'text/html');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.status(200).send(html);
     }
 
@@ -237,14 +302,17 @@ export default async function handler(req, res) {
     return res.status(404).json({
       error: 'Not Found',
       path: path,
+      original_url: req.url,
       message: 'Route inconnue',
       available_routes: [
-        '/ (GET)',
-        '/health (GET)',
-        '/skills (GET)',
-        '/initialize (POST)',
-        '/tools/list (POST)',
-        '/tools/call (POST)'
+        'GET /',
+        'GET /health',
+        'GET /skills',
+        'GET /skills/{name}',
+        'POST /initialize',
+        'POST /resources/list',
+        'POST /tools/list',
+        'POST /tools/call'
       ]
     });
 
