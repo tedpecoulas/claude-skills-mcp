@@ -25,6 +25,28 @@ const CLAUDE_SKILLS = {
 // Cache en mémoire
 const cache = new Map();
 
+// Helper pour parser le body JSON
+async function parseBody(req) {
+  return new Promise((resolve) => {
+    if (req.method !== 'POST') {
+      resolve({});
+      return;
+    }
+    
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (e) {
+        resolve({});
+      }
+    });
+  });
+}
+
 export default async function handler(req, res) {
   // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -35,7 +57,7 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Récupérer la route depuis les query params
+  // Récupérer la route
   const pathArray = req.query.path || [];
   const route = pathArray.join('/');
 
@@ -66,7 +88,7 @@ export default async function handler(req, res) {
 
     // Route: Skill spécifique
     if (route.startsWith('skills/')) {
-      const skillName = route.split('/').pop();
+      const skillName = pathArray[1]; // Le nom du skill est le 2ème élément
       const skill = CLAUDE_SKILLS[skillName];
       
       if (!skill) {
@@ -80,19 +102,9 @@ export default async function handler(req, res) {
       // Récupérer le contenu avec cache
       let content = cache.get(skillName);
       if (!content) {
-        try {
-          const response = await fetch(skill.url);
-          if (!response.ok) {
-            throw new Error(`GitHub returned ${response.status}`);
-          }
-          content = await response.text();
-          cache.set(skillName, content);
-        } catch (error) {
-          return res.status(500).json({
-            error: 'Failed to fetch skill content',
-            message: error.message
-          });
-        }
+        const response = await fetch(skill.url);
+        content = await response.text();
+        cache.set(skillName, content);
       }
 
       return res.status(200).json({
@@ -102,8 +114,7 @@ export default async function handler(req, res) {
           uri: `skill://${skill.name}`
         },
         content: content,
-        content_length: content.length,
-        cached: cache.has(skillName)
+        content_length: content.length
       });
     }
 
@@ -144,19 +155,17 @@ export default async function handler(req, res) {
             description: "Liste tous les skills Claude disponibles",
             inputSchema: {
               type: "object",
-              properties: {},
-              required: []
+              properties: {}
             }
           },
           {
             name: "get_skill",
-            description: "Récupère le contenu complet d'un skill Claude spécifique",
+            description: "Récupère le contenu d'un skill Claude",
             inputSchema: {
               type: "object",
               properties: {
                 skill_name: {
                   type: "string",
-                  description: "Nom du skill à récupérer",
                   enum: Object.keys(CLAUDE_SKILLS)
                 }
               },
@@ -165,14 +174,11 @@ export default async function handler(req, res) {
           },
           {
             name: "search_skills",
-            description: "Recherche des skills par mot-clé dans le nom ou la description",
+            description: "Recherche des skills par mot-clé",
             inputSchema: {
               type: "object",
               properties: {
-                query: {
-                  type: "string",
-                  description: "Mot-clé à rechercher"
-                }
+                query: { type: "string" }
               },
               required: ["query"]
             }
@@ -183,7 +189,8 @@ export default async function handler(req, res) {
 
     // Route: MCP Tool Call
     if (route === 'tools/call' && req.method === 'POST') {
-      const { name, arguments: args } = req.body || {};
+      const body = await parseBody(req);
+      const { name, arguments: args } = body;
       
       // Tool: list_skills
       if (name === 'list_skills') {
@@ -206,48 +213,23 @@ export default async function handler(req, res) {
       // Tool: get_skill
       if (name === 'get_skill') {
         const skillName = args?.skill_name;
-        
-        if (!skillName) {
-          return res.status(400).json({
-            content: [{
-              type: "text",
-              text: "Error: skill_name parameter is required"
-            }],
-            isError: true
-          });
-        }
-
         const skill = CLAUDE_SKILLS[skillName];
         
         if (!skill) {
           return res.status(400).json({
             content: [{
               type: "text",
-              text: `Error: Skill '${skillName}' not found. Available skills: ${Object.keys(CLAUDE_SKILLS).join(', ')}`
+              text: `Skill '${skillName}' not found`
             }],
             isError: true
           });
         }
 
-        // Récupérer le contenu avec cache
         let content = cache.get(skillName);
         if (!content) {
-          try {
-            const response = await fetch(skill.url);
-            if (!response.ok) {
-              throw new Error(`GitHub API returned ${response.status}`);
-            }
-            content = await response.text();
-            cache.set(skillName, content);
-          } catch (error) {
-            return res.status(500).json({
-              content: [{
-                type: "text",
-                text: `Error fetching skill content: ${error.message}`
-              }],
-              isError: true
-            });
-          }
+          const response = await fetch(skill.url);
+          content = await response.text();
+          cache.set(skillName, content);
         }
 
         return res.status(200).json({
@@ -260,18 +242,7 @@ export default async function handler(req, res) {
 
       // Tool: search_skills
       if (name === 'search_skills') {
-        const query = args?.query?.toLowerCase();
-        
-        if (!query) {
-          return res.status(400).json({
-            content: [{
-              type: "text",
-              text: "Error: query parameter is required"
-            }],
-            isError: true
-          });
-        }
-
+        const query = args?.query?.toLowerCase() || '';
         const skills = Object.values(CLAUDE_SKILLS);
         const results = skills.filter(s =>
           s.name.toLowerCase().includes(query) ||
@@ -282,71 +253,34 @@ export default async function handler(req, res) {
           content: [{
             type: "text",
             text: JSON.stringify({
-              query: query,
+              query,
               found: results.length,
-              results: results.map(s => ({
-                name: s.name,
-                description: s.description,
-                uri: `skill://${s.name}`
-              }))
+              results
             }, null, 2)
           }]
         });
       }
 
-      // Tool inconnu
       return res.status(400).json({
         content: [{
           type: "text",
-          text: `Error: Unknown tool '${name}'. Available tools: list_skills, get_skill, search_skills`
+          text: `Unknown tool: ${name}`
         }],
         isError: true
       });
     }
 
-    // 404 - Route non trouvée
+    // 404 par défaut
     return res.status(404).json({
       error: 'Not Found',
       route: route,
-      path_array: pathArray,
-      message: 'Cette route n\'existe pas',
       available_routes: {
-        GET: [
-          '/health',
-          '/skills',
-          '/skills/{name}'
-        ],
-        POST: [
-          '/initialize',
-          '/resources/list',
-          '/tools/list',
-          '/tools/call'
-        ]
+        GET: ['health', 'skills', 'skills/{name}'],
+        POST: ['initialize', 'resources/list', 'tools/list', 'tools/call']
       }
     });
 
   } catch (error) {
-    console.error('Server Error:', error);
+    console.error('Error:', error);
     return res.status(500).json({
-      error: 'Internal Server Error',
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-}
-```
-
----
-
-## 📂 Structure Finale
-
-Après avoir créé ces fichiers, votre structure doit être :
-```
-votre-projet/
-├── api/
-│   ├── mcp.js                    ← Fichier 1 (page HTML)
-│   └── mcp/
-│       └── [...path].js          ← Fichier 2 (routes JSON)
-├── package.json
-├── vercel.json
-└── ...
+      error: 'I
