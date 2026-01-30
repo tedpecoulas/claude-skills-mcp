@@ -1,0 +1,38 @@
+{
+  "name": "claude-skills-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server exposant tous les skills Claude (pptx, docx, xlsx, pdf) pour DUST et autres clients MCP",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "tsc",
+    "deploy": "vercel --prod",
+    "test": "node --loader ts-node/esm test/test-server.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "skills",
+    "anthropic",
+    "dust",
+    "vercel"
+  ],
+  "author": "Nexialog Consulting",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "node-fetch": "^3.3.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "@vercel/node": "^3.0.21",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3",
+    "vercel": "^50.9.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
