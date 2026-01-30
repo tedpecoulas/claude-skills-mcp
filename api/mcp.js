@@ -1,4 +1,4 @@
-// Importations simplifiées
+// Skills disponibles
 const CLAUDE_SKILLS = {
   pptx: {
     name: "pptx",
@@ -36,11 +36,12 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const path = req.url.split('?')[0];
+  // FIX: Utiliser req.url directement (chemin relatif dans Vercel Functions)
+  const path = req.url?.split('?')[0] || '/';
 
   try {
     // Route: Health check
-    if (path === '/api/mcp/health') {
+    if (path === '/health') {
       return res.status(200).json({
         status: 'healthy',
         server: 'claude-skills-mcp-gateway',
@@ -50,7 +51,7 @@ export default async function handler(req, res) {
     }
 
     // Route: Liste des skills
-    if (path === '/api/mcp/skills') {
+    if (path === '/skills') {
       const skills = Object.values(CLAUDE_SKILLS);
       return res.status(200).json({
         total: skills.length,
@@ -63,7 +64,7 @@ export default async function handler(req, res) {
     }
 
     // Route: Skill spécifique
-    if (path.startsWith('/api/mcp/skills/')) {
+    if (path.startsWith('/skills/')) {
       const skillName = path.split('/').pop();
       const skill = CLAUDE_SKILLS[skillName];
       
@@ -89,7 +90,7 @@ export default async function handler(req, res) {
     }
 
     // Route: MCP Initialize
-    if (path === '/api/mcp/initialize') {
+    if (path === '/initialize' && req.method === 'POST') {
       return res.status(200).json({
         protocolVersion: "2024-11-05",
         capabilities: { resources: {}, tools: {} },
@@ -100,10 +101,28 @@ export default async function handler(req, res) {
       });
     }
 
+    // Route: MCP Resources List
+    if (path === '/resources/list' && req.method === 'POST') {
+      const skills = Object.values(CLAUDE_SKILLS);
+      return res.status(200).json({
+        resources: skills.map(s => ({
+          uri: `skill://${s.name}`,
+          name: `Claude Skill: ${s.name}`,
+          description: s.description,
+          mimeType: "text/markdown"
+        }))
+      });
+    }
+
     // Route: MCP Tools List
-    if (path === '/api/mcp/tools/list') {
+    if (path === '/tools/list' && req.method === 'POST') {
       return res.status(200).json({
         tools: [
+          {
+            name: "list_skills",
+            description: "Liste tous les skills disponibles",
+            inputSchema: { type: "object", properties: {} }
+          },
           {
             name: "get_skill",
             description: "Récupère le contenu d'un skill Claude",
@@ -123,9 +142,19 @@ export default async function handler(req, res) {
     }
 
     // Route: MCP Tool Call
-    if (path === '/api/mcp/tools/call') {
+    if (path === '/tools/call' && req.method === 'POST') {
       const { name, arguments: args } = req.body;
       
+      if (name === 'list_skills') {
+        const skills = Object.values(CLAUDE_SKILLS);
+        return res.status(200).json({
+          content: [{
+            type: "text",
+            text: JSON.stringify({ total: skills.length, skills }, null, 2)
+          }]
+        });
+      }
+
       if (name === 'get_skill') {
         const skillName = args?.skill_name;
         const skill = CLAUDE_SKILLS[skillName];
@@ -154,16 +183,20 @@ export default async function handler(req, res) {
     }
 
     // Route: Page d'accueil
-    if (path === '/api/mcp' || path === '/') {
+    if (path === '/' || path === '') {
       const html = `
 <!DOCTYPE html>
 <html>
 <head>
   <title>Claude Skills MCP Gateway</title>
   <style>
-    body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; }
+    body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; line-height: 1.6; }
     h1 { color: #2563eb; }
-    .skill { background: #f3f4f6; padding: 10px; margin: 10px 0; border-radius: 5px; }
+    .skill { background: #f3f4f6; padding: 15px; margin: 10px 0; border-radius: 8px; }
+    .skill strong { color: #1f2937; }
+    code { background: #e5e7eb; padding: 4px 8px; border-radius: 4px; font-size: 14px; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -178,13 +211,21 @@ export default async function handler(req, res) {
   `).join('')}
   
   <h2>🔗 URL pour DUST</h2>
-  <code>${req.headers.host}/api/mcp</code>
+  <code>https://${req.headers.host}/api/mcp</code>
   
   <h2>📡 Endpoints</h2>
   <ul>
-    <li><a href="/api/mcp/health">GET /api/mcp/health</a></li>
-    <li><a href="/api/mcp/skills">GET /api/mcp/skills</a></li>
+    <li><a href="/api/mcp/health">GET /api/mcp/health</a> - Health check</li>
+    <li><a href="/api/mcp/skills">GET /api/mcp/skills</a> - Liste des skills</li>
+    <li>POST /api/mcp/initialize - Initialisation MCP</li>
+    <li>POST /api/mcp/tools/list - Liste des outils</li>
+    <li>POST /api/mcp/tools/call - Appel d'outil</li>
   </ul>
+  
+  <p style="margin-top: 40px; color: #6b7280;">
+    <strong>Status:</strong> ✅ Opérationnel<br>
+    <strong>Version:</strong> 1.0.0
+  </p>
 </body>
 </html>`;
       
@@ -196,10 +237,14 @@ export default async function handler(req, res) {
     return res.status(404).json({
       error: 'Not Found',
       path: path,
+      message: 'Route inconnue',
       available_routes: [
-        '/api/mcp',
-        '/api/mcp/health',
-        '/api/mcp/skills'
+        '/ (GET)',
+        '/health (GET)',
+        '/skills (GET)',
+        '/initialize (POST)',
+        '/tools/list (POST)',
+        '/tools/call (POST)'
       ]
     });
 
