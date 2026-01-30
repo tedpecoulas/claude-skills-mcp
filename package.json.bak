@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vercel dev",
-    "build": "echo 'No build needed'",
-    "deploy": "vercel --prod"
+    "build": "tsc",
+    "deploy": "vercel --prod",
+    "test": "node --loader ts-node/esm test/test-server.ts"
   },
   "keywords": [
     "mcp",
