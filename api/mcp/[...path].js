@@ -22,12 +22,11 @@ const CLAUDE_SKILLS = {
   }
 };
 
-// Cache
+// Cache en mémoire
 const cache = new Map();
 
-// Handler principal
 export default async function handler(req, res) {
-  // CORS
+  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -36,23 +35,24 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Récupérer le path depuis req.query.path (catch-all route)
+  // Récupérer la route depuis les query params
   const pathArray = req.query.path || [];
-  const path = '/' + pathArray.join('/');
+  const route = pathArray.join('/');
 
   try {
     // Route: Health check
-    if (path === '/health') {
+    if (route === 'health') {
       return res.status(200).json({
         status: 'healthy',
         server: 'claude-skills-mcp-gateway',
         version: '1.0.0',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        skills_count: Object.keys(CLAUDE_SKILLS).length
       });
     }
 
     // Route: Liste des skills
-    if (path === '/skills') {
+    if (route === 'skills') {
       const skills = Object.values(CLAUDE_SKILLS);
       return res.status(200).json({
         total: skills.length,
@@ -65,35 +65,56 @@ export default async function handler(req, res) {
     }
 
     // Route: Skill spécifique
-    if (path.startsWith('/skills/')) {
-      const skillName = path.split('/').pop();
+    if (route.startsWith('skills/')) {
+      const skillName = route.split('/').pop();
       const skill = CLAUDE_SKILLS[skillName];
       
       if (!skill) {
         return res.status(404).json({
           error: 'Skill not found',
+          requested: skillName,
           available: Object.keys(CLAUDE_SKILLS)
         });
       }
 
+      // Récupérer le contenu avec cache
       let content = cache.get(skillName);
       if (!content) {
-        const response = await fetch(skill.url);
-        content = await response.text();
-        cache.set(skillName, content);
+        try {
+          const response = await fetch(skill.url);
+          if (!response.ok) {
+            throw new Error(`GitHub returned ${response.status}`);
+          }
+          content = await response.text();
+          cache.set(skillName, content);
+        } catch (error) {
+          return res.status(500).json({
+            error: 'Failed to fetch skill content',
+            message: error.message
+          });
+        }
       }
 
       return res.status(200).json({
-        skill: skill,
-        content: content
+        skill: {
+          name: skill.name,
+          description: skill.description,
+          uri: `skill://${skill.name}`
+        },
+        content: content,
+        content_length: content.length,
+        cached: cache.has(skillName)
       });
     }
 
     // Route: MCP Initialize
-    if (path === '/initialize' && req.method === 'POST') {
+    if (route === 'initialize' && req.method === 'POST') {
       return res.status(200).json({
         protocolVersion: "2024-11-05",
-        capabilities: { resources: {}, tools: {} },
+        capabilities: {
+          resources: {},
+          tools: {}
+        },
         serverInfo: {
           name: "claude-skills-gateway",
           version: "1.0.0"
@@ -102,7 +123,7 @@ export default async function handler(req, res) {
     }
 
     // Route: MCP Resources List
-    if (path === '/resources/list' && req.method === 'POST') {
+    if (route === 'resources/list' && req.method === 'POST') {
       const skills = Object.values(CLAUDE_SKILLS);
       return res.status(200).json({
         resources: skills.map(s => ({
@@ -115,22 +136,27 @@ export default async function handler(req, res) {
     }
 
     // Route: MCP Tools List
-    if (path === '/tools/list' && req.method === 'POST') {
+    if (route === 'tools/list' && req.method === 'POST') {
       return res.status(200).json({
         tools: [
           {
             name: "list_skills",
-            description: "Liste tous les skills disponibles",
-            inputSchema: { type: "object", properties: {} }
+            description: "Liste tous les skills Claude disponibles",
+            inputSchema: {
+              type: "object",
+              properties: {},
+              required: []
+            }
           },
           {
             name: "get_skill",
-            description: "Récupère le contenu d'un skill Claude",
+            description: "Récupère le contenu complet d'un skill Claude spécifique",
             inputSchema: {
               type: "object",
               properties: {
                 skill_name: {
                   type: "string",
+                  description: "Nom du skill à récupérer",
                   enum: Object.keys(CLAUDE_SKILLS)
                 }
               },
@@ -139,11 +165,14 @@ export default async function handler(req, res) {
           },
           {
             name: "search_skills",
-            description: "Recherche des skills par mot-clé",
+            description: "Recherche des skills par mot-clé dans le nom ou la description",
             inputSchema: {
               type: "object",
               properties: {
-                query: { type: "string" }
+                query: {
+                  type: "string",
+                  description: "Mot-clé à rechercher"
+                }
               },
               required: ["query"]
             }
@@ -153,16 +182,17 @@ export default async function handler(req, res) {
     }
 
     // Route: MCP Tool Call
-    if (path === '/tools/call' && req.method === 'POST') {
-      const { name, arguments: args } = req.body;
+    if (route === 'tools/call' && req.method === 'POST') {
+      const { name, arguments: args } = req.body || {};
       
+      // Tool: list_skills
       if (name === 'list_skills') {
         const skills = Object.values(CLAUDE_SKILLS);
         return res.status(200).json({
           content: [{
             type: "text",
-            text: JSON.stringify({ 
-              total_skills: skills.length, 
+            text: JSON.stringify({
+              total_skills: skills.length,
               skills: skills.map(s => ({
                 name: s.name,
                 description: s.description,
@@ -173,22 +203,51 @@ export default async function handler(req, res) {
         });
       }
 
+      // Tool: get_skill
       if (name === 'get_skill') {
         const skillName = args?.skill_name;
-        const skill = CLAUDE_SKILLS[skillName];
         
-        if (!skill) {
+        if (!skillName) {
           return res.status(400).json({
-            content: [{ type: "text", text: "Skill not found" }],
+            content: [{
+              type: "text",
+              text: "Error: skill_name parameter is required"
+            }],
             isError: true
           });
         }
 
+        const skill = CLAUDE_SKILLS[skillName];
+        
+        if (!skill) {
+          return res.status(400).json({
+            content: [{
+              type: "text",
+              text: `Error: Skill '${skillName}' not found. Available skills: ${Object.keys(CLAUDE_SKILLS).join(', ')}`
+            }],
+            isError: true
+          });
+        }
+
+        // Récupérer le contenu avec cache
         let content = cache.get(skillName);
         if (!content) {
-          const response = await fetch(skill.url);
-          content = await response.text();
-          cache.set(skillName, content);
+          try {
+            const response = await fetch(skill.url);
+            if (!response.ok) {
+              throw new Error(`GitHub API returned ${response.status}`);
+            }
+            content = await response.text();
+            cache.set(skillName, content);
+          } catch (error) {
+            return res.status(500).json({
+              content: [{
+                type: "text",
+                text: `Error fetching skill content: ${error.message}`
+              }],
+              isError: true
+            });
+          }
         }
 
         return res.status(200).json({
@@ -199,11 +258,16 @@ export default async function handler(req, res) {
         });
       }
 
+      // Tool: search_skills
       if (name === 'search_skills') {
         const query = args?.query?.toLowerCase();
+        
         if (!query) {
           return res.status(400).json({
-            content: [{ type: "text", text: "Query parameter required" }],
+            content: [{
+              type: "text",
+              text: "Error: query parameter is required"
+            }],
             isError: true
           });
         }
@@ -218,94 +282,71 @@ export default async function handler(req, res) {
           content: [{
             type: "text",
             text: JSON.stringify({
-              query,
+              query: query,
               found: results.length,
-              results
+              results: results.map(s => ({
+                name: s.name,
+                description: s.description,
+                uri: `skill://${s.name}`
+              }))
             }, null, 2)
           }]
         });
       }
 
+      // Tool inconnu
       return res.status(400).json({
-        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        content: [{
+          type: "text",
+          text: `Error: Unknown tool '${name}'. Available tools: list_skills, get_skill, search_skills`
+        }],
         isError: true
       });
     }
 
-    // Route: Page d'accueil (root ou vide)
-    if (path === '/' || pathArray.length === 0) {
-      const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Claude Skills MCP Gateway</title>
-  <style>
-    body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; line-height: 1.6; }
-    h1 { color: #2563eb; }
-    .skill { background: #f3f4f6; padding: 15px; margin: 10px 0; border-radius: 8px; }
-    .skill strong { color: #1f2937; }
-    code { background: #e5e7eb; padding: 4px 8px; border-radius: 4px; font-size: 14px; }
-    a { color: #2563eb; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .status { color: #10b981; font-weight: bold; }
-  </style>
-</head>
-<body>
-  <h1>🎯 Claude Skills MCP Gateway</h1>
-  <p>Serveur MCP exposant les skills Claude pour DUST</p>
-  <p class="status">✅ Status: Opérationnel</p>
-  
-  <h2>📚 Skills Disponibles</h2>
-  ${Object.values(CLAUDE_SKILLS).map(s => `
-    <div class="skill">
-      <strong>${s.name}</strong>: ${s.description}
-    </div>
-  `).join('')}
-  
-  <h2>🔗 URL pour DUST</h2>
-  <code>https://${req.headers.host}/api/mcp</code>
-  
-  <h2>📡 Endpoints Disponibles</h2>
-  <ul>
-    <li><a href="/api/mcp/health">GET /api/mcp/health</a> - Health check</li>
-    <li><a href="/api/mcp/skills">GET /api/mcp/skills</a> - Liste des skills</li>
-    <li>POST /api/mcp/initialize - Initialisation MCP</li>
-    <li>POST /api/mcp/resources/list - Liste des ressources</li>
-    <li>POST /api/mcp/tools/list - Liste des outils</li>
-    <li>POST /api/mcp/tools/call - Appel d'outil</li>
-  </ul>
-  
-  <p style="margin-top: 40px; color: #6b7280; font-size: 14px;">
-    <strong>Version:</strong> 1.0.0 | <strong>Nexialog Consulting</strong>
-  </p>
-</body>
-</html>`;
-      
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.status(200).send(html);
-    }
-
-    // 404 par défaut
+    // 404 - Route non trouvée
     return res.status(404).json({
       error: 'Not Found',
-      path: path,
-      pathArray: pathArray,
-      available_routes: [
-        'GET /',
-        'GET /health',
-        'GET /skills',
-        'POST /initialize',
-        'POST /tools/list',
-        'POST /tools/call'
-      ]
+      route: route,
+      path_array: pathArray,
+      message: 'Cette route n\'existe pas',
+      available_routes: {
+        GET: [
+          '/health',
+          '/skills',
+          '/skills/{name}'
+        ],
+        POST: [
+          '/initialize',
+          '/resources/list',
+          '/tools/list',
+          '/tools/call'
+        ]
+      }
     });
 
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Server Error:', error);
     return res.status(500).json({
       error: 'Internal Server Error',
-      message: error.message
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 }
+```
+
+---
+
+## 📂 Structure Finale
+
+Après avoir créé ces fichiers, votre structure doit être :
+```
+votre-projet/
+├── api/
+│   ├── mcp.js                    ← Fichier 1 (page HTML)
+│   └── mcp/
+│       └── [...path].js          ← Fichier 2 (routes JSON)
+├── package.json
+├── vercel.json
+└── ...
