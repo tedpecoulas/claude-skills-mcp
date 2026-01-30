@@ -25,13 +25,6 @@ const CLAUDE_SKILLS = {
 // Cache
 const cache = new Map();
 
-// Helper pour normaliser le path
-function normalizePath(url) {
-  const path = url?.split('?')[0] || '/';
-  // Retirer /api/mcp du début si présent
-  return path.replace(/^\/api\/mcp/, '') || '/';
-}
-
 // Handler principal
 export default async function handler(req, res) {
   // CORS
@@ -43,8 +36,9 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Normaliser le path
-  const path = normalizePath(req.url);
+  // Récupérer le path depuis req.query.path (catch-all route)
+  const pathArray = req.query.path || [];
+  const path = '/' + pathArray.join('/');
 
   try {
     // Route: Health check
@@ -82,7 +76,6 @@ export default async function handler(req, res) {
         });
       }
 
-      // Récupérer le contenu (avec cache)
       let content = cache.get(skillName);
       if (!content) {
         const response = await fetch(skill.url);
@@ -227,11 +220,7 @@ export default async function handler(req, res) {
             text: JSON.stringify({
               query,
               found: results.length,
-              results: results.map(s => ({
-                name: s.name,
-                description: s.description,
-                uri: `skill://${s.name}`
-              }))
+              results
             }, null, 2)
           }]
         });
@@ -243,8 +232,8 @@ export default async function handler(req, res) {
       });
     }
 
-    // Route: Page d'accueil
-    if (path === '/' || path === '') {
+    // Route: Page d'accueil (root ou vide)
+    if (path === '/' || pathArray.length === 0) {
       const html = `
 <!DOCTYPE html>
 <html>
@@ -288,8 +277,7 @@ export default async function handler(req, res) {
   </ul>
   
   <p style="margin-top: 40px; color: #6b7280; font-size: 14px;">
-    <strong>Version:</strong> 1.0.0 | 
-    <strong>Nexialog Consulting</strong>
+    <strong>Version:</strong> 1.0.0 | <strong>Nexialog Consulting</strong>
   </p>
 </body>
 </html>`;
@@ -302,15 +290,12 @@ export default async function handler(req, res) {
     return res.status(404).json({
       error: 'Not Found',
       path: path,
-      original_url: req.url,
-      message: 'Route inconnue',
+      pathArray: pathArray,
       available_routes: [
         'GET /',
         'GET /health',
         'GET /skills',
-        'GET /skills/{name}',
         'POST /initialize',
-        'POST /resources/list',
         'POST /tools/list',
         'POST /tools/call'
       ]
