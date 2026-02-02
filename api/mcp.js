@@ -2,6 +2,30 @@
 // File: api/mcp.js
 
 export default function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // Si POST, c'est DUST qui essaie d'initialiser
+  if (req.method === 'POST') {
+    return res.status(200).json({
+      protocolVersion: "2024-11-05",
+      capabilities: {
+        resources: {},
+        tools: {}
+      },
+      serverInfo: {
+        name: "claude-skills-gateway",
+        version: "1.0.0"
+      }
+    });
+  }
+
+  // Si GET, afficher la page HTML
   const html = `<!DOCTYPE html>
 <html>
 <head>
