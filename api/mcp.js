@@ -2,11 +2,80 @@
 // File: api/mcp.js
 
 export default function handler(req, res) {
-  // CORS headers
+  // Check if client wants SSE
+  const acceptHeader = req.headers.accept || '';
+  const wantsSSE = acceptHeader.includes('text/event-stream');
+  
+  console.log('Accept header:', acceptHeader);
+  console.log('Wants SSE:', wantsSSE);
+  
+  // If SSE is requested, use SSE transport
+  if (wantsSSE && req.method === 'POST') {
+    console.log('🔄 Switching to SSE transport');
+    
+    // SSE Headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    // Send response as SSE event
+    let body = {};
+    if (req.body) {
+      body = req.body;
+    }
+    
+    const requestId = body.id || 0;
+    const method = body.method || '';
+    const params = body.params || {};
+    
+    console.log('SSE Request - Method:', method);
+    
+    // Send initialize response as SSE
+    if (method === 'initialize') {
+      const clientVersion = params.protocolVersion || "2025-06-18";
+      
+      const response = {
+        jsonrpc: "2.0",
+        id: requestId,
+        result: {
+          protocolVersion: clientVersion,
+          capabilities: {
+            resources: {
+              subscribe: false,
+              listChanged: false
+            },
+            tools: {
+              listChanged: false
+            },
+            prompts: {
+              listChanged: false
+            },
+            logging: {}
+          },
+          serverInfo: {
+            name: "claude-skills-gateway",
+            version: "1.0.0"
+          }
+        }
+      };
+      
+      res.write(`data: ${JSON.stringify(response)}\n\n`);
+      
+      // Keep connection alive briefly
+      setTimeout(() => {
+        res.end();
+      }, 1000);
+      
+      return;
+    }
+  }
+  
+  // CORS headers for non-SSE
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
+  
   // Handle preflight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
