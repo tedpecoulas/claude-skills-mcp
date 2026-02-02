@@ -1,4 +1,4 @@
-// MCP Tools Call Endpoint - JSON-RPC 2.0 Format
+// MCP Tools Call Endpoint - Executes tool calls
 // File: api/mcp/tools-call.js
 
 const CLAUDE_SKILLS = {
@@ -44,12 +44,6 @@ async function getRawBody(req) {
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
   
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -57,58 +51,50 @@ export default async function handler(req, res) {
   
   try {
     const body = req.body || await getRawBody(req);
-    const requestId = body.id || 1;
-    const params = body.params || {};
-    const toolName = params.name;
-    const args = params.arguments || {};
+    const toolName = body.name;
+    const args = body.arguments || {};
     
     // Tool: list_skills
     if (toolName === 'list_skills') {
       const skills = Object.values(CLAUDE_SKILLS);
       return res.status(200).json({
-        jsonrpc: "2.0",
-        id: requestId,
-        result: {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              total: skills.length,
-              skills: skills.map(s => ({
-                name: s.name,
-                description: s.description,
-                uri: 'skill://' + s.name
-              }))
-            }, null, 2)
-          }]
-        }
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            total: skills.length,
+            skills: skills.map(s => ({
+              name: s.name,
+              description: s.description,
+              uri: 'skill://' + s.name
+            }))
+          }, null, 2)
+        }]
       });
     }
     
-    // Tool: get_skill
+    // Tool: get_skill - THE MOST IMPORTANT ONE
     if (toolName === 'get_skill') {
       const skillName = args.skill_name;
       
       if (!skillName) {
-        return res.status(200).json({
-          jsonrpc: "2.0",
-          id: requestId,
-          error: {
-            code: -32602,
-            message: "skill_name parameter is required"
-          }
+        return res.status(400).json({
+          content: [{
+            type: "text",
+            text: "Error: skill_name parameter is required"
+          }],
+          isError: true
         });
       }
       
       const skill = CLAUDE_SKILLS[skillName];
       
       if (!skill) {
-        return res.status(200).json({
-          jsonrpc: "2.0",
-          id: requestId,
-          error: {
-            code: -32602,
-            message: "Skill '" + skillName + "' not found. Available: pptx, docx, xlsx, pdf"
-          }
+        return res.status(400).json({
+          content: [{
+            type: "text",
+            text: "Error: Skill '" + skillName + "' not found. Available: pptx, docx, xlsx, pdf"
+          }],
+          isError: true
         });
       }
       
@@ -135,27 +121,22 @@ export default async function handler(req, res) {
           }, 3600000);
           
         } catch (error) {
-          return res.status(200).json({
-            jsonrpc: "2.0",
-            id: requestId,
-            error: {
-              code: -32603,
-              message: "Error fetching skill from GitHub: " + error.message
-            }
+          return res.status(500).json({
+            content: [{
+              type: "text",
+              text: "Error fetching skill from GitHub: " + error.message
+            }],
+            isError: true
           });
         }
       }
       
       // Return the skill content
       return res.status(200).json({
-        jsonrpc: "2.0",
-        id: requestId,
-        result: {
-          content: [{
-            type: "text",
-            text: "# " + skill.name.toUpperCase() + " Skill\n\n" + skill.description + "\n\n---\n\n" + content
-          }]
-        }
+        content: [{
+          type: "text",
+          text: "# " + skill.name.toUpperCase() + " Skill\n\n" + skill.description + "\n\n---\n\n" + content
+        }]
       });
     }
     
@@ -164,13 +145,12 @@ export default async function handler(req, res) {
       const query = (args.query || '').toLowerCase();
       
       if (!query) {
-        return res.status(200).json({
-          jsonrpc: "2.0",
-          id: requestId,
-          error: {
-            code: -32602,
-            message: "query parameter is required"
-          }
+        return res.status(400).json({
+          content: [{
+            type: "text",
+            text: "Error: query parameter is required"
+          }],
+          isError: true
         });
       }
       
@@ -181,44 +161,38 @@ export default async function handler(req, res) {
       );
       
       return res.status(200).json({
-        jsonrpc: "2.0",
-        id: requestId,
-        result: {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              query: query,
-              found: results.length,
-              results: results.map(s => ({
-                name: s.name,
-                description: s.description,
-                uri: 'skill://' + s.name
-              }))
-            }, null, 2)
-          }]
-        }
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            query: query,
+            found: results.length,
+            results: results.map(s => ({
+              name: s.name,
+              description: s.description,
+              uri: 'skill://' + s.name
+            }))
+          }, null, 2)
+        }]
       });
     }
     
     // Unknown tool
-    return res.status(200).json({
-      jsonrpc: "2.0",
-      id: requestId,
-      error: {
-        code: -32601,
-        message: "Unknown tool '" + toolName + "'. Available: list_skills, get_skill, search_skills"
-      }
+    return res.status(400).json({
+      content: [{
+        type: "text",
+        text: "Error: Unknown tool '" + toolName + "'. Available: list_skills, get_skill, search_skills"
+      }],
+      isError: true
     });
     
   } catch (error) {
     console.error('Error in tools/call:', error);
-    return res.status(200).json({
-      jsonrpc: "2.0",
-      id: 1,
-      error: {
-        code: -32603,
-        message: "Internal server error: " + error.message
-      }
+    return res.status(500).json({
+      content: [{
+        type: "text",
+        text: "Internal server error: " + error.message
+      }],
+      isError: true
     });
   }
 }
