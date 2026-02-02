@@ -26,8 +26,17 @@ if (req.method === 'POST') {
     result: {
       protocolVersion: "2024-11-05",
       capabilities: {
-        resources: {},
-        tools: {}
+        resources: {
+          subscribe: false,
+          listChanged: false
+        },
+        tools: {
+          listChanged: false
+        },
+        prompts: {
+          listChanged: false
+        },
+        logging: {}
       },
       serverInfo: {
         name: "claude-skills-gateway",
