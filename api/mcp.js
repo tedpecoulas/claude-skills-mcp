@@ -10,9 +10,20 @@ export default function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Si POST, c'est DUST qui essaie d'initialiser
-  if (req.method === 'POST') {
-    return res.status(200).json({
+// Si POST, c'est DUST qui essaie d'initialiser avec JSON-RPC
+if (req.method === 'POST') {
+  // Parser le body pour récupérer l'id de la requête
+  let body = {};
+  if (req.body) {
+    body = req.body;
+  }
+  
+  const requestId = body.id || 1;
+  
+  return res.status(200).json({
+    jsonrpc: "2.0",
+    id: requestId,
+    result: {
       protocolVersion: "2024-11-05",
       capabilities: {
         resources: {},
@@ -22,8 +33,10 @@ export default function handler(req, res) {
         name: "claude-skills-gateway",
         version: "1.0.0"
       }
-    });
-  }
+    }
+  });
+}
+
 
   // Si GET, afficher la page HTML
   const html = `<!DOCTYPE html>
