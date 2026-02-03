@@ -1,13 +1,15 @@
 // Claude Skills MCP Gateway - Main Endpoint
 // File: api/mcp.js
 
-export default function handler(req, res) {
+export default async function handler(req, res) {
   // Check if client wants SSE
   const acceptHeader = req.headers.accept || '';
   const wantsSSE = acceptHeader.includes('text/event-stream');
   
+  console.log('===============================');
   console.log('Accept header:', acceptHeader);
   console.log('Wants SSE:', wantsSSE);
+  console.log('===============================');
   
   // ============================================
   // SSE MODE (Server-Sent Events)
@@ -31,9 +33,10 @@ export default function handler(req, res) {
     const method = body.method || '';
     const params = body.params || {};
     
-    console.log('SSE Request - Method:', method);
-    console.log('SSE Request - ID:', requestId);
-    console.log('SSE Request - Params:', params);
+    console.log('📨 SSE Request:');
+    console.log('  - Method:', method);
+    console.log('  - ID:', requestId);
+    console.log('  - Params:', JSON.stringify(params, null, 2));
     
     // === HANDLE SSE NOTIFICATIONS (no id, no response) ===
     if (requestId === undefined) {
@@ -49,7 +52,6 @@ export default function handler(req, res) {
         return res.status(200).end();
       }
       
-      // Unknown notification (accept silently)
       console.log('⚠️ Unknown SSE notification:', method);
       return res.status(200).end();
     }
@@ -88,13 +90,7 @@ export default function handler(req, res) {
       
       console.log('📤 Sending SSE initialize response');
       res.write(`data: ${JSON.stringify(response)}\n\n`);
-      
-      // Keep connection alive briefly
-      setTimeout(() => {
-        console.log('🔚 Closing SSE connection');
-        res.end();
-      }, 1000);
-      
+      setTimeout(() => res.end(), 1000);
       return;
     }
     
@@ -124,7 +120,7 @@ export default function handler(req, res) {
                 properties: {
                   skill_name: {
                     type: "string",
-                    description: "Nom du skill a recuperer",
+                    description: "Nom du skill a recuperer (pptx, docx, xlsx, pdf)",
                     enum: ["pptx", "docx", "xlsx", "pdf"]
                   }
                 },
@@ -144,6 +140,191 @@ export default function handler(req, res) {
                 },
                 required: ["query"]
               }
+            }
+          ]
+        }
+      };
+      
+      console.log('📤 Sending SSE tools list');
+      res.write(`data: ${JSON.stringify(response)}\n\n`);
+      setTimeout(() => res.end(), 1000);
+      return;
+    }
+    
+    // Tools call (SSE) - 🔥 NOUVEAU : ajout du support tools/call en SSE
+    if (method === 'tools/call') {
+      const toolName = params.name;
+      const args = params.arguments || {};
+      
+      console.log('🛠️ SSE Tool called:', toolName);
+      console.log('📝 SSE Tool arguments:', JSON.stringify(args, null, 2));
+      
+      // Tool: list_skills
+      if (toolName === 'list_skills') {
+        console.log('✅ Executing SSE list_skills');
+        
+        const response = {
+          jsonrpc: "2.0",
+          id: requestId,
+          result: {
+            content: [{
+              type: "text",
+              text: JSON.stringify({
+                total: 4,
+                skills: [
+                  { name: "pptx", description: "Presentations PowerPoint", source: "Anthropic Cookbook" },
+                  { name: "docx", description: "Documents Word", source: "Anthropic Cookbook" },
+                  { name: "xlsx", description: "Feuilles Excel", source: "Anthropic Cookbook" },
+                  { name: "pdf", description: "Fichiers PDF", source: "Anthropic Cookbook" }
+                ]
+              }, null, 2)
+            }]
+          }
+        };
+        
+        res.write(`data: ${JSON.stringify(response)}\n\n`);
+        setTimeout(() => res.end(), 1000);
+        return;
+      }
+      
+      // Tool: get_skill (avec fetch GitHub)
+      if (toolName === 'get_skill') {
+        const skillName = args.skill_name;
+        console.log('✅ Executing SSE get_skill for:', skillName);
+        
+        try {
+          // URL du skill sur GitHub (Anthropic Cookbook)
+          const githubUrl = `https://raw.githubusercontent.com/anthropics/anthropic-cookbook/main/skills/${skillName}/${skillName}.md`;
+          console.log('📥 Fetching from GitHub:', githubUrl);
+          
+          const githubResponse = await fetch(githubUrl);
+          
+          if (!githubResponse.ok) {
+            throw new Error(`GitHub returned ${githubResponse.status}`);
+          }
+          
+          const skillContent = await githubResponse.text();
+          console.log(`✅ Successfully fetched ${skillName} skill (${skillContent.length} characters)`);
+          
+          const response = {
+            jsonrpc: "2.0",
+            id: requestId,
+            result: {
+              content: [{
+                type: "text",
+                text: skillContent
+              }]
+            }
+          };
+          
+          res.write(`data: ${JSON.stringify(response)}\n\n`);
+          setTimeout(() => res.end(), 1000);
+          return;
+          
+        } catch (error) {
+          console.error('❌ Error fetching skill from GitHub:', error);
+          
+          const errorResponse = {
+            jsonrpc: "2.0",
+            id: requestId,
+            error: {
+              code: -32000,
+              message: `Erreur lors du chargement du skill ${skillName} depuis GitHub: ${error.message}`
+            }
+          };
+          
+          res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
+          setTimeout(() => res.end(), 1000);
+          return;
+        }
+      }
+      
+      // Tool: search_skills
+      if (toolName === 'search_skills') {
+        const query = args.query || '';
+        console.log('✅ Executing SSE search_skills with query:', query);
+        
+        const allSkills = [
+          { name: "pptx", description: "Presentations PowerPoint", tags: ["office", "presentation", "slides"] },
+          { name: "docx", description: "Documents Word", tags: ["office", "document", "texte", "word"] },
+          { name: "xlsx", description: "Feuilles Excel", tags: ["office", "tableur", "data", "excel"] },
+          { name: "pdf", description: "Fichiers PDF", tags: ["document", "pdf", "export"] }
+        ];
+        
+        const queryLower = query.toLowerCase();
+        const results = allSkills.filter(skill => 
+          skill.name.includes(queryLower) || 
+          skill.description.toLowerCase().includes(queryLower) ||
+          skill.tags.some(tag => tag.includes(queryLower))
+        );
+        
+        const response = {
+          jsonrpc: "2.0",
+          id: requestId,
+          result: {
+            content: [{
+              type: "text",
+              text: JSON.stringify({ 
+                query, 
+                results,
+                total: results.length 
+              }, null, 2)
+            }]
+          }
+        };
+        
+        res.write(`data: ${JSON.stringify(response)}\n\n`);
+        setTimeout(() => res.end(), 1000);
+        return;
+      }
+      
+      // Unknown tool
+      console.log('❌ Unknown SSE tool:', toolName);
+      const errorResponse = {
+        jsonrpc: "2.0",
+        id: requestId,
+        error: {
+          code: -32601,
+          message: `Unknown tool: ${toolName}`
+        }
+      };
+      res.write(`data: ${JSON.stringify(errorResponse)}\n\n`);
+      setTimeout(() => res.end(), 1000);
+      return;
+    }
+    
+    // Resources list (SSE)
+    if (method === 'resources/list') {
+      console.log('📚 SSE resources/list requested');
+      
+      const response = {
+        jsonrpc: "2.0",
+        id: requestId,
+        result: {
+          resources: [
+            {
+              uri: "skill://pptx",
+              name: "Claude Skill: pptx",
+              description: "Presentations PowerPoint",
+              mimeType: "text/markdown"
+            },
+            {
+              uri: "skill://docx",
+              name: "Claude Skill: docx",
+              description: "Documents Word",
+              mimeType: "text/markdown"
+            },
+            {
+              uri: "skill://xlsx",
+              name: "Claude Skill: xlsx",
+              description: "Feuilles Excel",
+              mimeType: "text/markdown"
+            },
+            {
+              uri: "skill://pdf",
+              name: "Claude Skill: pdf",
+              description: "Fichiers PDF",
+              mimeType: "text/markdown"
             }
           ]
         }
@@ -187,7 +368,7 @@ export default function handler(req, res) {
   // === DEBUG LOGS ===
   if (req.method === 'POST') {
     console.log('===============================');
-    console.log('🔍 DUST REQUEST RECEIVED');
+    console.log('🔍 DUST REQUEST RECEIVED (Standard HTTP)');
     console.log('Headers Accept:', req.headers.accept);
     console.log('Headers Content-Type:', req.headers['content-type']);
     console.log('Body:', JSON.stringify(req.body, null, 2));
@@ -199,7 +380,6 @@ export default function handler(req, res) {
 
   // === HANDLE POST - MCP JSON-RPC ===
   if (req.method === 'POST') {
-    // Parse body
     let body = {};
     if (req.body) {
       body = req.body;
@@ -213,25 +393,16 @@ export default function handler(req, res) {
     if (requestId === undefined) {
       console.log('📬 Notification received:', method);
       
-      // notifications/initialized
       if (method === 'notifications/initialized') {
         console.log('✅ Client initialized successfully');
         return res.status(200).end();
       }
       
-      // notifications/cancelled
       if (method === 'notifications/cancelled') {
         console.log('⚠️ Request cancelled:', params);
         return res.status(200).end();
       }
       
-      // notifications/progress
-      if (method === 'notifications/progress') {
-        console.log('📊 Progress notification:', params);
-        return res.status(200).end();
-      }
-      
-      // Unknown notification (accept silently)
       console.log('⚠️ Unknown notification:', method);
       return res.status(200).end();
     }
@@ -294,7 +465,7 @@ export default function handler(req, res) {
                 properties: {
                   skill_name: {
                     type: "string",
-                    description: "Nom du skill a recuperer",
+                    description: "Nom du skill a recuperer (pptx, docx, xlsx, pdf)",
                     enum: ["pptx", "docx", "xlsx", "pdf"]
                   }
                 },
@@ -358,24 +529,6 @@ export default function handler(req, res) {
       });
     }
     
-    // Route: resources/read
-    if (method === 'resources/read') {
-      const resourceUri = params.uri;
-      console.log('📖 Resource read requested:', resourceUri);
-      
-      return res.status(200).json({
-        jsonrpc: "2.0",
-        id: requestId,
-        result: {
-          contents: [{
-            uri: resourceUri,
-            mimeType: "text/markdown",
-            text: `# Skill ${resourceUri}\n\nContenu du skill sera charge ici.`
-          }]
-        }
-      });
-    }
-    
     // Route: tools/call
     if (method === 'tools/call') {
       const toolName = params.name;
@@ -397,10 +550,10 @@ export default function handler(req, res) {
               text: JSON.stringify({
                 total: 4,
                 skills: [
-                  { name: "pptx", description: "Presentations PowerPoint" },
-                  { name: "docx", description: "Documents Word" },
-                  { name: "xlsx", description: "Feuilles Excel" },
-                  { name: "pdf", description: "Fichiers PDF" }
+                  { name: "pptx", description: "Presentations PowerPoint", source: "Anthropic Cookbook" },
+                  { name: "docx", description: "Documents Word", source: "Anthropic Cookbook" },
+                  { name: "xlsx", description: "Feuilles Excel", source: "Anthropic Cookbook" },
+                  { name: "pdf", description: "Fichiers PDF", source: "Anthropic Cookbook" }
                 ]
               }, null, 2)
             }]
@@ -408,21 +561,47 @@ export default function handler(req, res) {
         });
       }
       
-      // Tool: get_skill
+      // Tool: get_skill (avec fetch GitHub)
       if (toolName === 'get_skill') {
         const skillName = args.skill_name;
         console.log('✅ Executing get_skill for:', skillName);
         
-        return res.status(200).json({
-          jsonrpc: "2.0",
-          id: requestId,
-          result: {
-            content: [{
-              type: "text",
-              text: `# Skill: ${skillName}\n\nSkill ${skillName} disponible. Contenu sera charge depuis GitHub lors de l'utilisation reelle.`
-            }]
+        try {
+          const githubUrl = `https://raw.githubusercontent.com/anthropics/anthropic-cookbook/main/skills/${skillName}/${skillName}.md`;
+          console.log('📥 Fetching from GitHub:', githubUrl);
+          
+          const githubResponse = await fetch(githubUrl);
+          
+          if (!githubResponse.ok) {
+            throw new Error(`GitHub returned ${githubResponse.status}`);
           }
-        });
+          
+          const skillContent = await githubResponse.text();
+          console.log(`✅ Successfully fetched ${skillName} skill (${skillContent.length} characters)`);
+          
+          return res.status(200).json({
+            jsonrpc: "2.0",
+            id: requestId,
+            result: {
+              content: [{
+                type: "text",
+                text: skillContent
+              }]
+            }
+          });
+          
+        } catch (error) {
+          console.error('❌ Error fetching skill from GitHub:', error);
+          
+          return res.status(200).json({
+            jsonrpc: "2.0",
+            id: requestId,
+            error: {
+              code: -32000,
+              message: `Erreur lors du chargement du skill ${skillName} depuis GitHub: ${error.message}`
+            }
+          });
+        }
       }
       
       // Tool: search_skills
@@ -430,13 +609,31 @@ export default function handler(req, res) {
         const query = args.query || '';
         console.log('✅ Executing search_skills with query:', query);
         
+        const allSkills = [
+          { name: "pptx", description: "Presentations PowerPoint", tags: ["office", "presentation", "slides"] },
+          { name: "docx", description: "Documents Word", tags: ["office", "document", "texte", "word"] },
+          { name: "xlsx", description: "Feuilles Excel", tags: ["office", "tableur", "data", "excel"] },
+          { name: "pdf", description: "Fichiers PDF", tags: ["document", "pdf", "export"] }
+        ];
+        
+        const queryLower = query.toLowerCase();
+        const results = allSkills.filter(skill => 
+          skill.name.includes(queryLower) || 
+          skill.description.toLowerCase().includes(queryLower) ||
+          skill.tags.some(tag => tag.includes(queryLower))
+        );
+        
         return res.status(200).json({
           jsonrpc: "2.0",
           id: requestId,
           result: {
             content: [{
               type: "text",
-              text: `# Recherche: "${query}"\n\nSkills correspondants seront listes ici.`
+              text: JSON.stringify({ 
+                query, 
+                results,
+                total: results.length 
+              }, null, 2)
             }]
           }
         });
@@ -450,19 +647,6 @@ export default function handler(req, res) {
         error: {
           code: -32601,
           message: `Unknown tool: ${toolName}`
-        }
-      });
-    }
-    
-    // Route: prompts/list
-    if (method === 'prompts/list') {
-      console.log('📝 Prompts list requested');
-      
-      return res.status(200).json({
-        jsonrpc: "2.0",
-        id: requestId,
-        result: {
-          prompts: []
         }
       });
     }
@@ -511,23 +695,11 @@ export default function handler(req, res) {
       color: #10b981; 
       font-weight: bold; 
     }
-    .info {
-      background: #dbeafe;
-      padding: 15px;
-      border-radius: 8px;
-      margin: 20px 0;
-    }
   </style>
 </head>
 <body>
   <h1>🚀 Claude Skills MCP Gateway</h1>
   <p class="status">✅ Status: Operationnel</p>
-  
-  <div class="info">
-    <strong>Version:</strong> 1.0.0<br>
-    <strong>Protocol:</strong> MCP (Model Context Protocol)<br>
-    <strong>Transport:</strong> JSON-RPC 2.0 + SSE
-  </div>
   
   <h2>📦 Skills Disponibles</h2>
   <div class="skill"><strong>pptx</strong>: Presentations PowerPoint</div>
@@ -536,27 +708,13 @@ export default function handler(req, res) {
   <div class="skill"><strong>pdf</strong>: Fichiers PDF</div>
   
   <h2>🔗 Configuration DUST</h2>
-  <p>URL du serveur MCP :</p>
-  <code>https://claude-skills-mcp.vercel.app/api/mcp</code>
+  <code>https://votre-url.vercel.app/api/mcp</code>
   
   <h2>🛠️ Outils Disponibles</h2>
   <ul>
     <li><strong>list_skills</strong>: Liste tous les skills disponibles</li>
-    <li><strong>get_skill</strong>: Recupere un skill specifique</li>
+    <li><strong>get_skill</strong>: Recupere un skill depuis GitHub</li>
     <li><strong>search_skills</strong>: Recherche de skills par mot-cle</li>
-  </ul>
-  
-  <h2>📖 Protocol MCP</h2>
-  <p>Ce serveur supporte :</p>
-  <ul>
-    <li>✅ Methode <code>initialize</code></li>
-    <li>✅ Notification <code>notifications/initialized</code></li>
-    <li>✅ Methode <code>tools/list</code></li>
-    <li>✅ Methode <code>tools/call</code></li>
-    <li>✅ Methode <code>resources/list</code></li>
-    <li>✅ Methode <code>resources/read</code></li>
-    <li>✅ Transport SSE (Server-Sent Events)</li>
-    <li>✅ Transport HTTP standard</li>
   </ul>
 </body>
 </html>`;
